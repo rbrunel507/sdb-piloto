@@ -1,0 +1,14 @@
+name: pilot-capabilities
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/pilot-capabilities.yml', '.github/workflows/pilot-capabilities-reusable.yml']
+permissions: {}
+jobs:
+  capabilities:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/pilot-capabilities-reusable.yml

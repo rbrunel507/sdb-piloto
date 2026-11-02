@@ -1,0 +1,54 @@
+name: pilot-capabilities-reusable
+on:
+  workflow_call:
+permissions: {}
+jobs:
+  attest-and-verify:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Create synthetic artifact
+        run: |
+          mkdir -p capability-evidence
+          printf 'Synthetic SDB infrastructure probe. Run %s, commit %s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > capability-evidence/probe.txt
+      - name: Attest synthetic artifact
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: capability-evidence/probe.txt
+      - name: Verify signature and rejection cases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" capability-evidence/bundle.json
+          gh version > capability-evidence/gh-version.txt
+          workflow="$GITHUB_REPOSITORY/.github/workflows/pilot-capabilities-reusable.yml"
+          args=(--repo "$GITHUB_REPOSITORY" --bundle "$BUNDLE_PATH" --signer-workflow "$workflow" --signer-digest "$GITHUB_SHA" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners)
+          gh attestation verify capability-evidence/probe.txt "${args[@]}" --format json > capability-evidence/verified.json
+          cp capability-evidence/probe.txt capability-evidence/tampered.txt
+          printf 'changed\n' >> capability-evidence/tampered.txt
+          set +e
+          gh attestation verify capability-evidence/tampered.txt "${args[@]}" > capability-evidence/tampered.log 2>&1
+          tampered_rc=$?
+          gh attestation verify capability-evidence/probe.txt --repo "$GITHUB_REPOSITORY" --bundle "$BUNDLE_PATH" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/wrong-producer.yml" --format json > capability-evidence/wrong-producer.log 2>&1
+          producer_rc=$?
+          set -e
+          printf '{"tampered_exit":%s,"wrong_producer_exit":%s,"scope":"synthetic platform capabilities; not SDB gate approval"}\n' "$tampered_rc" "$producer_rc" > capability-evidence/results.json
+          test "$tampered_rc" -ne 0
+          test "$producer_rc" -ne 0
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: platform-capabilities-evidence
+          path: capability-evidence/
+          retention-days: 14
